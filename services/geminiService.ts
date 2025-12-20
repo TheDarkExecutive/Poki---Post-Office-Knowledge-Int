@@ -113,12 +113,12 @@ export const extractMailDetails = async (base64Image: string): Promise<Extracted
           {
             parts: [
               { inlineData: { mimeType: 'image/jpeg', data: base64Image } },
-              { text: "Meticulously extract: Tracking ID, Recipient Name, Full Address, and 6-digit PIN. If characters are blurry, use context of Indian states/cities to infer correctly. Return structured JSON." }
+              { text: "CRITICAL TASK: Extract data from this Indian postal label. If the image is blurry, use contextual knowledge of Indian geography (states, cities, districts) to correct errors in OCR. Specifically look for a 6-digit PIN code and verify it against the state mentioned in the address." }
             ]
           }
         ],
         config: {
-          systemInstruction: "You are a high-performance Indian Postal OCR Agent. Your primary goal is to extract accurate data from mail labels, even if the image is blurry, noisy, or low-contrast. Analyze shapes and context (e.g., matching a PIN prefix to a State mentioned in the address). If information is truly unreadable, return 'N/A'. Ensure the 'isValid' flag is true only if the PIN is exactly 6 digits.",
+          systemInstruction: "You are a master Indian Postal Sorter with superior pattern recognition. Extract: Tracking ID, Recipient Name, Full Address, and a 6-digit PIN. If characters are low-confidence due to blur, intelligently infer based on common Indian naming conventions and geography. Return 'N/A' only if completely unreadable. 'isValid' should be true if a plausible 6-digit PIN is found.",
           temperature: 0.1, 
           responseMimeType: "application/json",
           responseSchema: {
@@ -137,13 +137,15 @@ export const extractMailDetails = async (base64Image: string): Promise<Extracted
 
       if (response.text) {
         const parsed = JSON.parse(response.text.trim()) as ExtractedMailData;
-        // Clean the pincode of any non-digit chars that might have slipped in
-        parsed.pincode = parsed.pincode.replace(/\D/g, '');
+        
+        // Clean PIN code of non-digits that might arise from noise
+        parsed.pincode = (parsed.pincode || '').replace(/\D/g, '');
         
         if (parsed.isValid && /^\d{6}$/.test(parsed.pincode)) {
           parsed.pincodeWarning = validatePostalData(parsed);
         } else {
-          parsed.isValid = false;
+          // If the model produced a non-6-digit PIN, it's invalid
+          if (parsed.pincode.length !== 6) parsed.isValid = false;
         }
         return parsed;
       }
