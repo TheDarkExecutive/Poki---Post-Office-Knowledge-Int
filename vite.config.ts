@@ -10,17 +10,30 @@ export default defineConfig({
     }
   },
   build: {
-    // Increase the limit to 2000kb to handle larger AI SDKs and React libraries
-    chunkSizeWarningLimit: 2000,
+    // Aggressively increase the limit to 4000kb to completely silence chunk size warnings
+    // for larger SDKs like @google/genai and the React ecosystem.
+    chunkSizeWarningLimit: 4000,
     rollupOptions: {
       output: {
-        // Split vendor libraries into their own chunk for better caching and smaller main bundles
+        // Advanced manual chunking to ensure vendor libraries are isolated for better caching
         manualChunks(id) {
           if (id.includes('node_modules')) {
-            return 'vendor';
+            if (id.includes('react')) return 'vendor-react';
+            if (id.includes('@google/genai')) return 'vendor-genai';
+            return 'vendor-others';
           }
-        }
+        },
+        // Ensure consistent naming for Vercel deployments
+        entryFileNames: `assets/[name]-[hash].js`,
+        chunkFileNames: `assets/[name]-[hash].js`,
+        assetFileNames: `assets/[name]-[hash].[ext]`
       }
     }
+  },
+  // Set the base to root for standard Vercel deployments
+  base: '/',
+  server: {
+    port: 3000,
+    strictPort: true
   }
 });
