@@ -1,4 +1,3 @@
-
 import { GoogleGenAI, Type } from "@google/genai";
 
 // Initialize Gemini API client safely
@@ -114,14 +113,13 @@ export const extractMailDetails = async (base64Image: string): Promise<Extracted
           {
             parts: [
               { inlineData: { mimeType: 'image/jpeg', data: base64Image } },
-              { text: "Extract Tracking ID, Recipient Name, Full Address, and 6-digit Indian PIN from this mail piece. Return JSON." }
+              { text: "Meticulously extract: Tracking ID, Recipient Name, Full Address, and 6-digit PIN. If characters are blurry, use context of Indian states/cities to infer correctly. Return structured JSON." }
             ]
           }
         ],
         config: {
-          systemInstruction: "You are an expert Indian Postal Sorter. Extract key postal fields precisely. If information is missing, provide 'N/A'. Always validate the PIN format is 6 digits.",
+          systemInstruction: "You are a high-performance Indian Postal OCR Agent. Your primary goal is to extract accurate data from mail labels, even if the image is blurry, noisy, or low-contrast. Analyze shapes and context (e.g., matching a PIN prefix to a State mentioned in the address). If information is truly unreadable, return 'N/A'. Ensure the 'isValid' flag is true only if the PIN is exactly 6 digits.",
           temperature: 0.1, 
-          thinkingConfig: { thinkingBudget: 0 },
           responseMimeType: "application/json",
           responseSchema: {
             type: Type.OBJECT,
@@ -139,6 +137,9 @@ export const extractMailDetails = async (base64Image: string): Promise<Extracted
 
       if (response.text) {
         const parsed = JSON.parse(response.text.trim()) as ExtractedMailData;
+        // Clean the pincode of any non-digit chars that might have slipped in
+        parsed.pincode = parsed.pincode.replace(/\D/g, '');
+        
         if (parsed.isValid && /^\d{6}$/.test(parsed.pincode)) {
           parsed.pincodeWarning = validatePostalData(parsed);
         } else {

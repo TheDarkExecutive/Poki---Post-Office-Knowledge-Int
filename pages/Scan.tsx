@@ -1,4 +1,3 @@
-
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
@@ -61,8 +60,9 @@ const Scan: React.FC<ScanProps> = ({ user, lang, isDark, setLang, toggleTheme })
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { 
           facingMode: 'environment', 
-          width: { ideal: 1920 }, 
-          height: { ideal: 1080 } 
+          width: { ideal: 3840 }, // Ask for 4K for best OCR detail
+          height: { ideal: 2160 },
+          focusMode: 'continuous'
         } as any,
         audio: false
       });
@@ -70,8 +70,19 @@ const Scan: React.FC<ScanProps> = ({ user, lang, isDark, setLang, toggleTheme })
       if (videoRef.current) videoRef.current.srcObject = stream;
       setStatusMsg('SEEKING POSTAL DATA');
     } catch (err) {
-      setStatusMsg("ERROR: NO OPTICS");
-      setIsScanning(false);
+      // Fallback to simpler constraints if 4K fails
+      try {
+        const fallbackStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment' },
+          audio: false
+        });
+        streamRef.current = fallbackStream;
+        if (videoRef.current) videoRef.current.srcObject = fallbackStream;
+        setStatusMsg('SEEKING POSTAL DATA (SD)');
+      } catch (e2) {
+        setStatusMsg("ERROR: NO OPTICS");
+        setIsScanning(false);
+      }
     }
   }, [stopHardware]);
 
@@ -93,13 +104,15 @@ const Scan: React.FC<ScanProps> = ({ user, lang, isDark, setLang, toggleTheme })
     try {
       if (video.readyState < 2) throw new Error("Video not ready");
       
+      // Use higher resolution capture
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;
-      const ctx = canvas.getContext('2d', { alpha: false });
+      const ctx = canvas.getContext('2d', { alpha: false, imageSmoothingEnabled: true, imageSmoothingQuality: 'high' });
       
       if (ctx) {
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+        // Use higher quality for OCR processing
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.95);
         const result = await extractMailDetails(dataUrl.split(',')[1]);
 
         if (result && result.isValid) {
@@ -130,7 +143,7 @@ const Scan: React.FC<ScanProps> = ({ user, lang, isDark, setLang, toggleTheme })
         } else if (result?.error === "CONGESTION") {
           setStatusMsg("RE-ESTABLISHING UPLINK...");
         } else {
-          setStatusMsg("INVALID OR BLURRED DATA");
+          setStatusMsg("BLURRY DATA - ADJUST FOCUS");
         }
       }
     } catch (e) {
@@ -143,7 +156,8 @@ const Scan: React.FC<ScanProps> = ({ user, lang, isDark, setLang, toggleTheme })
 
   useEffect(() => {
     if (isScanning) {
-      scanTimerRef.current = setInterval(captureAndAnalyze, 9000); 
+      // Auto-scan every 7 seconds for better flow
+      scanTimerRef.current = setInterval(captureAndAnalyze, 7000); 
     }
     return () => {
       if (scanTimerRef.current) clearInterval(scanTimerRef.current);
@@ -285,18 +299,21 @@ const Scan: React.FC<ScanProps> = ({ user, lang, isDark, setLang, toggleTheme })
             {isScanning ? 'PAUSE' : 'RESUME'}
           </button>
           <button 
-            onClick={finalizeSession} 
-            disabled={isFinalizing || items.length === 0}
-            className={`bg-[#002855] border-b-4 border-[#001d3d] text-white py-5 rounded-2xl font-black uppercase tracking-widest shadow-xl transition-all ${isFinalizing || items.length === 0 ? 'opacity-30 grayscale cursor-not-allowed' : 'active:scale-95 hover:bg-[#001d3d]'}`}
+            onClick={captureAndAnalyze} 
+            disabled={isFinalizing || isProcessing || !isScanning}
+            className={`bg-[#002855] border-b-4 border-[#001d3d] text-white py-5 rounded-2xl font-black uppercase tracking-widest shadow-xl transition-all ${isFinalizing || isProcessing || !isScanning ? 'opacity-30 grayscale cursor-not-allowed' : 'active:scale-95 hover:bg-[#001d3d]'}`}
           >
-            FINALIZE
+            {isProcessing ? 'SCANNING...' : 'FORCE SCAN'}
           </button>
         </div>
 
         <div className={`rounded-3xl p-6 shadow-sm border flex-1 flex flex-col min-h-[160px] relative overflow-hidden ${isDark ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-100'}`}>
           <div className="flex justify-between items-center mb-5 border-b border-slate-50 pb-3">
             <h4 className="font-black text-[10px] uppercase tracking-widest text-slate-400">SESSION LOG</h4>
-            <span className="bg-[#002855] text-white text-[9px] font-black px-2 py-0.5 rounded-full italic">{items.length} UNITS</span>
+            <div className="flex space-x-2">
+               <button onClick={finalizeSession} className="text-[8px] bg-[#E6192E] text-white px-2 py-1 rounded font-black uppercase">Finalize Now</button>
+               <span className="bg-[#002855] text-white text-[9px] font-black px-2 py-0.5 rounded-full italic">{items.length} UNITS</span>
+            </div>
           </div>
           <div className="space-y-2 overflow-y-auto max-h-[200px] flex-1 px-1">
             {items.length === 0 && (
