@@ -1,0 +1,156 @@
+
+import { GoogleGenAI, Type } from "@google/genai";
+
+// Initialize Gemini API client
+const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+
+/**
+ * Indian PIN Region Mapping (First Digit)
+ */
+const REGION_MAP: Record<string, string[]> = {
+  '1': ['Delhi', 'Haryana', 'Punjab', 'Himachal', 'Jammu', 'Kashmir', 'Chandigarh'],
+  '2': ['Uttar Pradesh', 'Uttarakhand'],
+  '3': ['Rajasthan', 'Gujarat', 'Daman', 'Diu', 'Dadra'],
+  '4': ['Maharashtra', 'Goa', 'Madhya Pradesh', 'Chhattisgarh'],
+  '5': ['Andhra Pradesh', 'Telangana', 'Karnataka'],
+  '6': ['Tamil Nadu', 'Kerala', 'Puducherry', 'Lakshadweep'],
+  '7': ['West Bengal', 'Odisha', 'Assam', 'Sikkim', 'Arunachal', 'Nagaland', 'Manipur', 'Mizoram', 'Tripura', 'Meghalaya'],
+  '8': ['Bihar', 'Jharkhand'],
+  '9': ['Army Postal Service', 'Field Post Office']
+};
+
+export const PINCODE_DATABASE = [
+  { pincode: '500001', region: 'South', state: 'Telangana', district: 'Hyderabad' },
+  { pincode: '560001', region: 'South', state: 'Karnataka', district: 'Bangalore' },
+  { pincode: '600001', region: 'South', state: 'Tamil Nadu', district: 'Chennai' },
+  { pincode: '682001', region: 'South', state: 'Kerala', district: 'Ernakulam' },
+  { pincode: '110001', region: 'North', state: 'Delhi', district: 'New Delhi' },
+  { pincode: '110002', region: 'North', state: 'Delhi', district: 'New Delhi' },
+  { pincode: '110003', region: 'North', state: 'Delhi', district: 'New Delhi' },
+  { pincode: '400001', region: 'West', state: 'Maharashtra', district: 'Mumbai' },
+  { pincode: '700001', region: 'East', state: 'West Bengal', district: 'Kolkata' },
+  { pincode: '302001', region: 'North', state: 'Rajasthan', district: 'Jaipur' },
+];
+
+export interface ExtractedMailData {
+  trackingId: string;
+  recipientName: string;
+  address: string;
+  pincode: string;
+  isValid: boolean;
+  pincodeWarning?: string;
+  error?: string; // New: capture specific error types
+}
+
+/**
+ * Enhanced Retry Logic for Network Reliability
+ */
+async function retryWithBackoff<T>(fn: () => Promise<T>, maxRetries = 4, initialDelay = 1500): Promise<T> {
+  let currentDelay = initialDelay;
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      return await fn();
+    } catch (error: any) {
+      const isRetryable = 
+        error?.status === 429 || // Rate limit
+        error?.status === 500 || // Internal server error
+        error?.status === 503 || // Service unavailable
+        error?.status === 504 || // Gateway timeout
+        error?.message?.includes('fetch') || // Network fetch errors
+        error?.message?.includes('network');
+
+      if (isRetryable && i < maxRetries - 1) {
+        console.warn(`Transient error encountered. Retrying in ${currentDelay}ms... (Attempt ${i + 1}/${maxRetries})`);
+        await new Promise(r => setTimeout(r, currentDelay));
+        currentDelay *= 1.5; // Exponential backoff
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw new Error("RETRY_LIMIT_EXCEEDED");
+}
+
+const validatePostalData = (data: ExtractedMailData): string | undefined => {
+  const pin = data.pincode;
+  const addr = data.address.toLowerCase();
+
+  const match = PINCODE_DATABASE.find(entry => entry.pincode === pin);
+  if (match) {
+    const stateMatch = addr.includes(match.state.toLowerCase());
+    const districtMatch = addr.includes(match.district.toLowerCase()) || 
+                         (match.district === 'Bangalore' && addr.includes('bengaluru'));
+    if (!stateMatch || !districtMatch) {
+      return `MISMATCH: PIN ${pin} IS ${match.district}, ${match.state}`;
+    }
+    return undefined;
+  }
+
+  const firstDigit = pin[0];
+  const validStates = REGION_MAP[firstDigit];
+  if (validStates) {
+    const hasValidState = validStates.some(state => addr.includes(state.toLowerCase()));
+    if (!hasValidState) {
+      const regionName = firstDigit === '1' || firstDigit === '2' ? 'NORTH' :
+                         firstDigit === '3' || firstDigit === '4' ? 'WEST' :
+                         firstDigit === '5' || firstDigit === '6' ? 'SOUTH' : 'EAST';
+      return `REGION MISMATCH: PIN ${pin} IS ${regionName} INDIA`;
+    }
+  } else {
+    return `INVALID PIN PREFIX: ${pin}`;
+  }
+
+  return undefined;
+};
+
+export const extractMailDetails = async (base64Image: string): Promise<ExtractedMailData | null> => {
+  try {
+    return await retryWithBackoff(async () => {
+      const response = await ai.models.generateContent({
+        model: 'gemini-3-flash-preview',
+        contents: [
+          {
+            parts: [
+              { inlineData: { mimeType: 'image/jpeg', data: base64Image } },
+              { text: "Extract Tracking ID, Recipient Name, Full Address, and 6-digit Indian PIN from this mail piece. Return JSON." }
+            ]
+          }
+        ],
+        config: {
+          systemInstruction: "You are an expert Indian Postal Sorter. Extract key postal fields precisely. If information is missing, provide 'N/A'. Always validate the PIN format is 6 digits.",
+          temperature: 0.1, 
+          thinkingConfig: { thinkingBudget: 0 }, // Disable thinking for OCR to minimize latency and prevent timeouts
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              trackingId: { type: Type.STRING },
+              recipientName: { type: Type.STRING },
+              address: { type: Type.STRING },
+              pincode: { type: Type.STRING },
+              isValid: { type: Type.BOOLEAN },
+            },
+            required: ["trackingId", "recipientName", "address", "pincode", "isValid"],
+          },
+        },
+      });
+
+      if (response.text) {
+        const parsed = JSON.parse(response.text.trim()) as ExtractedMailData;
+        if (parsed.isValid && /^\d{6}$/.test(parsed.pincode)) {
+          parsed.pincodeWarning = validatePostalData(parsed);
+        } else {
+          parsed.isValid = false;
+        }
+        return parsed;
+      }
+      return null;
+    });
+  } catch (error: any) {
+    console.error("Gemini OCR Failure:", error);
+    if (error.message === "RETRY_LIMIT_EXCEEDED") {
+      return { isValid: false, error: "CONGESTION", trackingId: '', recipientName: '', address: '', pincode: '' };
+    }
+    return null;
+  }
+};

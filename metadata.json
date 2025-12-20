@@ -1,0 +1,7 @@
+{
+  "name": "POKI THE FINALE",
+  "description": "A professional mail-sorting PWA with real-time AI OCR scanning, session management, and PDF report generation for postal logistics.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
