@@ -1,8 +1,8 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
 
-// Initialize Gemini API client
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// Initialize Gemini API client safely
+const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
 
 /**
  * Indian PIN Region Mapping (First Digit)
@@ -39,12 +39,9 @@ export interface ExtractedMailData {
   pincode: string;
   isValid: boolean;
   pincodeWarning?: string;
-  error?: string; // New: capture specific error types
+  error?: string;
 }
 
-/**
- * Enhanced Retry Logic for Network Reliability
- */
 async function retryWithBackoff<T>(fn: () => Promise<T>, maxRetries = 4, initialDelay = 1500): Promise<T> {
   let currentDelay = initialDelay;
   for (let i = 0; i < maxRetries; i++) {
@@ -52,17 +49,17 @@ async function retryWithBackoff<T>(fn: () => Promise<T>, maxRetries = 4, initial
       return await fn();
     } catch (error: any) {
       const isRetryable = 
-        error?.status === 429 || // Rate limit
-        error?.status === 500 || // Internal server error
-        error?.status === 503 || // Service unavailable
-        error?.status === 504 || // Gateway timeout
-        error?.message?.includes('fetch') || // Network fetch errors
+        error?.status === 429 || 
+        error?.status === 500 || 
+        error?.status === 503 || 
+        error?.status === 504 || 
+        error?.message?.includes('fetch') || 
         error?.message?.includes('network');
 
       if (isRetryable && i < maxRetries - 1) {
         console.warn(`Transient error encountered. Retrying in ${currentDelay}ms... (Attempt ${i + 1}/${maxRetries})`);
         await new Promise(r => setTimeout(r, currentDelay));
-        currentDelay *= 1.5; // Exponential backoff
+        currentDelay *= 1.5;
         continue;
       }
       throw error;
@@ -104,6 +101,11 @@ const validatePostalData = (data: ExtractedMailData): string | undefined => {
 };
 
 export const extractMailDetails = async (base64Image: string): Promise<ExtractedMailData | null> => {
+  if (!process.env.API_KEY) {
+    console.error("API_KEY is missing. Check your environment variables.");
+    return { isValid: false, error: "CONFIG_ERROR", trackingId: '', recipientName: '', address: '', pincode: '' };
+  }
+
   try {
     return await retryWithBackoff(async () => {
       const response = await ai.models.generateContent({
@@ -119,7 +121,7 @@ export const extractMailDetails = async (base64Image: string): Promise<Extracted
         config: {
           systemInstruction: "You are an expert Indian Postal Sorter. Extract key postal fields precisely. If information is missing, provide 'N/A'. Always validate the PIN format is 6 digits.",
           temperature: 0.1, 
-          thinkingConfig: { thinkingBudget: 0 }, // Disable thinking for OCR to minimize latency and prevent timeouts
+          thinkingConfig: { thinkingBudget: 0 },
           responseMimeType: "application/json",
           responseSchema: {
             type: Type.OBJECT,
